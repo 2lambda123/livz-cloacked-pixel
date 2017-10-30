@@ -187,7 +187,7 @@ def usage(progName):
 if __name__ == "__main__":
 	if len(sys.argv) < 3:
 		usage(sys.argv[0])
-
+	valid = True
 	if sys.argv[1] == "analyse":
 		analyse(sys.argv[2])
 	elif len(sys.argv) == 5:
@@ -195,5 +195,10 @@ if __name__ == "__main__":
 			embed(sys.argv[2], sys.argv[3], sys.argv[4])
 		elif sys.argv[1] == "extract":
 			extract(sys.argv[2], sys.argv[3], sys.argv[4])
+		else:
+			valid = False
 	else:
+		valid = False
+	if not valid:
 		print "[-] Invalid operation specified"
+		usage(sys.argv[0])

@@ -1,6 +1,6 @@
-import sys
 import struct
 import numpy
+import argparse
 import matplotlib.pyplot as plt
 
 from PIL import Image
@@ -10,11 +10,11 @@ from crypt import AESCipher
 # Decompose a binary file into an array of bits
 def decompose(data):
 	v = []
-	
+
 	# Pack file len in 4 bytes
 	fSize = len(data)
 	bytes = [ord(b) for b in struct.pack("i", fSize)]
-	
+
 	bytes += [ord(b) for b in data]
 
 	for b in bytes:
@@ -48,27 +48,26 @@ def set_bit(n, i, x):
 	return n
 
 # Embed payload file into LSB bits of an image
-def embed(imgFile, payload, password):
+def embed(args):
 	# Process source image
-	img = Image.open(imgFile)
+	img = Image.open(args.img_file)
 	(width, height) = img.size
 	conv = img.convert("RGBA").getdata()
 	print "[*] Input image size: %dx%d pixels." % (width, height)
 	max_size = width*height*3.0/8/1024		# max payload size
 	print "[*] Usable payload size: %.2f KB." % (max_size)
 
-	f = open(payload, "rb")
-	data = f.read()
-	f.close()
+	with open(args.payload_file, "rb") as f:
+		data = f.read()
 	print "[+] Payload size: %.3f KB " % (len(data)/1024.0)
-		
+
 	# Encypt
-	cipher = AESCipher(password)
+	cipher = AESCipher(args.password)
 	data_enc = cipher.encrypt(data)
 
 	# Process data from payload file
 	v = decompose(data_enc)
-	
+
 	# Add until multiple of 3
 	while(len(v)%3):
 		v.append(0)
@@ -78,7 +77,7 @@ def embed(imgFile, payload, password):
 	if (payload_size > max_size - 4):
 		print "[-] Cannot embed. File too large"
 		sys.exit()
-		
+
 	# Create output image
 	steg_img = Image.new('RGBA',(width, height))
 	data_img = steg_img.getdata()
@@ -94,15 +93,15 @@ def embed(imgFile, payload, password):
 				b = set_bit(b, 0, v[idx+2])
 			data_img.putpixel((w,h), (r, g, b, a))
 			idx = idx + 3
-    
-	steg_img.save(imgFile + "-stego.png", "PNG")
-	
-	print "[+] %s embedded successfully!" % payload
+
+	steg_img.save(args.img_file + "-stego.png", "PNG")
+
+	print "[+] %s embedded successfully!" % args.payload_file
 
 # Extract data embedded into LSB of the input file
-def extract(in_file, out_file, password):
+def extract(args):
 	# Process source image
-	img = Image.open(in_file)
+	img = Image.open(args.stego_file)
 	(width, height) = img.size
 	conv = img.convert("RGBA").getdata()
 	print "[+] Image size: %dx%d pixels." % (width, height)
@@ -119,18 +118,17 @@ def extract(in_file, out_file, password):
 	data_out = assemble(v)
 
 	# Decrypt
-	cipher = AESCipher(password)
+	cipher = AESCipher(args.password)
 	data_dec = cipher.decrypt(data_out)
 
 	# Write decrypted data
-	out_f = open(out_file, "wb")
-	out_f.write(data_dec)
-	out_f.close()
+	with open(args.out_file, "wb") as out_f:
+		out_f.write(data_dec)
 	
-	print "[+] Written extracted data to %s." % out_file
+	print "[+] Written extracted data to %s." % args.out_file
 
 # Statistical analysis of an image to detect LSB steganography
-def analyse(in_file):
+def analyse(args):
 	'''
 	- Split the image into blocks.
 	- Compute the average value of the LSBs for each block.
@@ -138,7 +136,7 @@ def analyse(in_file):
 	  hidden encrypted messages (random data).
 	'''
 	BS = 100	# Block size 
-	img = Image.open(in_file)
+	img = Image.open(args.img_file)
 	(width, height) = img.size
 	print "[+] Image size: %dx%d pixels." % (width, height)
 	conv = img.convert("RGBA").getdata()
@@ -173,7 +171,7 @@ def analyse(in_file):
 #	plt.plot(blocks, avgR, 'r.')
 #	plt.plot(blocks, avgG, 'g')
 	plt.plot(blocks, avgB, 'bo')
-	
+
 	plt.show()
 
 def usage(progName):
@@ -183,17 +181,59 @@ def usage(progName):
 	print "  %s extract <stego_file> <out_file> <password>" % progName
 	print "  %s analyse <stego_file>" % progName
 	sys.exit()
-	
+
+
+class ExtendedHelp(argparse._HelpAction):
+	# Based on: https://stackoverflow.com/a/24122778
+
+	def __call__(self, parser, namespace, values, option_string=None):
+		parser.print_help()
+		subparsers_actions = [action for action in parser._actions
+			if isinstance(action, argparse._SubParsersAction)]
+		for subparsers_action in subparsers_actions:
+			for choice, subparser in subparsers_action.choices.items():
+				subparser.print_usage()
+		parser.exit()
+
+
+def main():
+	parser = argparse.ArgumentParser(
+		description='LSB steganogprahy. Hide files within least significant bits of images.',
+		add_help=False)
+	subparsers = parser.add_subparsers()
+	def __add_arg_helper(sub_parser, argument, **kwargs):
+		if 'metavar' not in kwargs:
+			sub_parser.add_argument(
+				argument, metavar='<%s>' % argument, **kwargs)
+		else:
+			sub_parser.add_argument(argument, **kwargs)
+
+	analyse_parser = subparsers.add_parser('analyse', help='Analyse an image')
+	__add_arg_helper(analyse_parser, 'img_file', help='image to analyse')
+
+	hide_parser = subparsers.add_parser(
+		'hide', help='Hide file within an image')
+	__add_arg_helper(hide_parser, 'img_file', help='image to embed into')
+	__add_arg_helper(hide_parser, 'payload_file', help='file to embed')
+	__add_arg_helper(
+		hide_parser, 'password', help='Password to encrypt payload with')
+
+	extract_parser = subparsers.add_parser(
+		'extract', help='Extract a file from an image')
+	__add_arg_helper(extract_parser, 'stego_file', help='image to extract from')
+	__add_arg_helper(
+		extract_parser, 'out_file', help='file to write payload to')
+	__add_arg_helper(
+		extract_parser, 'password', help='Password to decrypt payload with')
+
+	analyse_parser.set_defaults(func=analyse)
+	hide_parser.set_defaults(func=embed)
+	extract_parser.set_defaults(func=extract)
+
+	parser.add_argument ('-h', '--help', action=ExtendedHelp, help='show this help message and exit')
+	args = parser.parse_args()
+	args.func(args)
+
+
 if __name__ == "__main__":
-	if len(sys.argv) < 3:
-		usage(sys.argv[0])
-		
-	if sys.argv[1] == "hide":		
-		embed(sys.argv[2], sys.argv[3], sys.argv[4])
-	elif sys.argv[1] == "extract":
-		extract(sys.argv[2], sys.argv[3], sys.argv[4])
-	elif sys.argv[1] == "analyse":
-		analyse(sys.argv[2])
-	else:
-		print "[-] Invalid operation specified"
-		
+	main()
